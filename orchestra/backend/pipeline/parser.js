@@ -26,7 +26,7 @@ async function parsePptx(fileSource) {
       });
     }
 
-    const doc = await pptxParser.getPowerPointText(filePath);
+    const doc = await pptxParser(filePath);
     let text = "";
     if (typeof doc === 'string') {
       text = doc;

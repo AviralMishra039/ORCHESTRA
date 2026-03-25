@@ -17,7 +17,7 @@ app.use(express.urlencoded({ extended: true }));
 const upload = multer({ dest: 'uploads/' });
 const db = require('./db/database');
 
-const activeJobs = {}; // In-memory dictionary tracking batch process status
+const activeJobs = {}; 
 
 app.post('/api/hackathon/upload', upload.single('csv_file'), async (req, res) => {
   try {
@@ -30,16 +30,15 @@ app.post('/api/hackathon/upload', upload.single('csv_file'), async (req, res) =>
     const hackathon_id = crypto.randomUUID();
     const ts = new Date().toISOString();
 
-    db.prepare(`
-      INSERT INTO hackathons (id, name, description, created_at) VALUES (?, ?, ?, ?)
-    `).run(hackathon_id, parsed.data.hackathon_name, parsed.data.description || null, ts);
+    await db.query(`
+      INSERT INTO hackathons (id, name, description, created_at) VALUES ($1, $2, $3, $4)
+    `, [hackathon_id, parsed.data.hackathon_name, parsed.data.description || null, ts]);
 
     const rows = [];
     fs.createReadStream(req.file.path)
       .pipe(csvParser())
       .on('data', (row) => rows.push(row))
       .on('end', () => {
-        // Start background batch evaluation
         activeJobs[hackathon_id] = { total: rows.length, completed: 0, status: 'processing', errors: [] };
         processBatch(hackathon_id, rows);
 
@@ -63,7 +62,6 @@ async function processBatch(hackathon_id, rows) {
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     
-    // Support lenient header matching from the CSV (case-insensitive keys mapping)
     const getVal = (possibleKeys) => {
       const key = Object.keys(row).find(k => possibleKeys.includes(k.trim().toLowerCase()));
       return key ? row[key] : '';
@@ -86,14 +84,14 @@ async function processBatch(hackathon_id, rows) {
       const { judgeOutputs, audit, chief, feedback, rawContent } = pipelineResult;
 
       const submission_id = crypto.randomUUID();
-      db.prepare(`
+      await db.query(`
         INSERT INTO submissions (id, hackathon_id, team_name, raw_content, prototype_url, total_score, confidence_tier, dimension_scores, agent_outputs, feedback_report, bias_flags, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `, [
         submission_id, hackathon_id, team_name, rawContent, prototype_url || null, chief.total_score,
         chief.confidence_tier, JSON.stringify(chief.dimension_scores), JSON.stringify(judgeOutputs),
         feedback, JSON.stringify(audit.flags || []), new Date().toISOString()
-      );
+      ]);
     } catch (e) {
       console.error(`Evaluation failed for team ${team_name}:`, e);
       activeJobs[hackathon_id].errors.push(`Team ${team_name}: ${e.message}`);
@@ -105,25 +103,24 @@ async function processBatch(hackathon_id, rows) {
   activeJobs[hackathon_id].status = 'completed';
 }
 
-
 app.get('/api/hackathon/progress/:id', (req, res) => {
   const job = activeJobs[req.params.id];
   if (!job) return res.json({ success: true, data: { status: 'unknown or finished', completed: 0, total: 0 } });
   res.json({ success: true, data: job });
 });
 
-app.get('/api/hackathons', (req, res) => {
+app.get('/api/hackathons', async (req, res) => {
   try {
-    const rows = db.prepare('SELECT * FROM hackathons ORDER BY created_at DESC').all();
+    const { rows } = await db.query('SELECT * FROM hackathons ORDER BY created_at DESC');
     res.json({ success: true, data: rows });
   } catch(err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.get('/api/leaderboard', (req, res) => {
+app.get('/api/leaderboard', async (req, res) => {
   try {
-    const rows = db.prepare('SELECT id as submission_id, team_name, total_score, confidence_tier, dimension_scores, prototype_url, hackathon_id FROM submissions ORDER BY total_score DESC').all();
+    const { rows } = await db.query('SELECT id as submission_id, team_name, total_score, confidence_tier, dimension_scores, prototype_url, hackathon_id FROM submissions ORDER BY total_score DESC');
     const rankedRows = rows.map((r, i) => ({
       ...r,
       rank: i + 1,
@@ -135,9 +132,9 @@ app.get('/api/leaderboard', (req, res) => {
   }
 });
 
-app.get('/api/leaderboard/:hackathon_id', (req, res) => {
+app.get('/api/leaderboard/:hackathon_id', async (req, res) => {
   try {
-    const rows = db.prepare('SELECT id as submission_id, team_name, total_score, confidence_tier, dimension_scores, prototype_url, hackathon_id FROM submissions WHERE hackathon_id = ? ORDER BY total_score DESC').all(req.params.hackathon_id);
+    const { rows } = await db.query('SELECT id as submission_id, team_name, total_score, confidence_tier, dimension_scores, prototype_url, hackathon_id FROM submissions WHERE hackathon_id = $1 ORDER BY total_score DESC', [req.params.hackathon_id]);
     const rankedRows = rows.map((r, i) => ({
       ...r,
       rank: i + 1,
@@ -149,14 +146,20 @@ app.get('/api/leaderboard/:hackathon_id', (req, res) => {
   }
 });
 
-app.get('/api/stats', (req, res) => {
+app.get('/api/stats', async (req, res) => {
   try {
-    const summary = db.prepare('SELECT COUNT(*) as c, AVG(total_score) as a FROM submissions').get();
-    const topTeam = db.prepare('SELECT team_name, total_score FROM submissions ORDER BY total_score DESC LIMIT 1').get() || null;
+    const sumParams = await db.query('SELECT COUNT(*) as c, AVG(total_score) as a FROM submissions');
+    const bParams = await db.query('SELECT team_name, total_score FROM submissions ORDER BY total_score DESC LIMIT 1');
+    const summary = sumParams.rows[0];
+    const topTeam = bParams.rows[0] || null;
     
+    // Postgres COUNT/AVG returns string decimals occasionally, safely parse
+    const count = parseInt(summary.c || 0);
+    const avg = parseFloat(summary.a || 0);
+
     res.json({ success: true, data: { 
-      total_submissions: summary.c, 
-      average_score: Math.round(summary.a * 10) / 10 || 0, 
+      total_submissions: count, 
+      average_score: Math.round(avg * 10) / 10 || 0, 
       top_team: topTeam 
     }});
   } catch(err) {
@@ -164,13 +167,15 @@ app.get('/api/stats', (req, res) => {
   }
 });
 
-// Used by individual results page
-app.get('/api/results/:id', (req, res) => {
+app.get('/api/results/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM submissions WHERE id = ?').get(req.params.id);
-    if (!row) return res.status(404).json({ success: false, error: "Submission not found" });
+    const subRes = await db.query('SELECT * FROM submissions WHERE id = $1', [req.params.id]);
+    if (subRes.rows.length === 0) return res.status(404).json({ success: false, error: "Submission not found" });
+    const row = subRes.rows[0];
     
-    const overrides = db.prepare('SELECT * FROM overrides WHERE submission_id = ? ORDER BY created_at ASC').all(req.params.id);
+    const overRes = await db.query('SELECT * FROM overrides WHERE submission_id = $1 ORDER BY created_at ASC', [req.params.id]);
+    const overrides = overRes.rows;
+
     const data = {
       ...row,
       dimension_scores: JSON.parse(row.dimension_scores),
@@ -184,24 +189,26 @@ app.get('/api/results/:id', (req, res) => {
   }
 });
 
-// Standard Override API
-app.put('/api/override/:id', (req, res) => {
+app.put('/api/override/:id', async (req, res) => {
   try {
     const sub_id = req.params.id;
     const { dimension, new_score, reason, judge_name } = req.body;
-    const sub = db.prepare('SELECT * FROM submissions WHERE id = ?').get(sub_id);
-    if (!sub) return res.status(404).json({ success: false, error: "Submission not found" });
+    
+    const subRes = await db.query('SELECT * FROM submissions WHERE id = $1', [sub_id]);
+    if (subRes.rows.length === 0) return res.status(404).json({ success: false, error: "Submission not found" });
+    const sub = subRes.rows[0];
 
     let dimScores = JSON.parse(sub.dimension_scores);
     const original_score = dimScores[dimension] || 0;
 
-    const insertStmt = db.prepare(`
+    await db.query(`
       INSERT INTO overrides (id, submission_id, dimension, original_score, new_score, reason, judge_name, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    insertStmt.run(crypto.randomUUID(), sub_id, dimension, original_score, new_score, reason, judge_name, new Date().toISOString());
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `, [crypto.randomUUID(), sub_id, dimension, original_score, new_score, reason, judge_name, new Date().toISOString()]);
 
-    const latestOverrides = db.prepare('SELECT dimension, new_score FROM overrides WHERE submission_id = ? ORDER BY created_at DESC').all(sub_id);
+    const latestRes = await db.query('SELECT dimension, new_score FROM overrides WHERE submission_id = $1 ORDER BY created_at DESC', [sub_id]);
+    const latestOverrides = latestRes.rows;
+
     const overrideMap = {};
     latestOverrides.forEach(o => {
       if (!(o.dimension in overrideMap)) overrideMap[o.dimension] = o.new_score;
@@ -212,7 +219,7 @@ app.put('/api/override/:id', (req, res) => {
       totalScore += overrideMap[dim] !== undefined ? overrideMap[dim] : dimScores[dim];
     });
 
-    db.prepare('UPDATE submissions SET total_score = ? WHERE id = ?').run(totalScore, sub_id);
+    await db.query('UPDATE submissions SET total_score = $1 WHERE id = $2', [totalScore, sub_id]);
     res.json({ success: true, data: { message: "Override recorded", total_score: totalScore } });
 
   } catch(err) {

@@ -1,53 +1,60 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+const { Pool } = require('pg');
+require('dotenv').config();
 
-const dbPath = path.join(__dirname, '..', 'orchestra.db');
-const db = new Database(dbPath);
-
-console.log('Initializing better-sqlite3 database at:', dbPath);
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS hackathons (
-    id TEXT PRIMARY KEY,
-    name TEXT,
-    description TEXT,
-    created_at TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS submissions (
-    id TEXT PRIMARY KEY,
-    hackathon_id TEXT,
-    team_name TEXT,
-    raw_content TEXT,
-    prototype_url TEXT,
-    total_score REAL,
-    confidence_tier TEXT,
-    dimension_scores TEXT,
-    agent_outputs TEXT,
-    feedback_report TEXT,
-    bias_flags TEXT,
-    created_at TEXT,
-    FOREIGN KEY(hackathon_id) REFERENCES hackathons(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS overrides (
-    id TEXT PRIMARY KEY,
-    submission_id TEXT,
-    dimension TEXT,
-    original_score REAL,
-    new_score REAL,
-    reason TEXT,
-    judge_name TEXT,
-    created_at TEXT,
-    FOREIGN KEY(submission_id) REFERENCES submissions(id)
-  );
-`);
-
-// Safely attempt to add hackathon_id column if table already existed without it from the previous prototype version
-try {
-  db.exec('ALTER TABLE submissions ADD COLUMN hackathon_id TEXT');
-} catch (e) {
-  // Ignore if column already exists
+if (!process.env.DATABASE_URL) {
+  console.warn("WARNING: DATABASE_URL not set in .env! NeonDB connection will fail.");
 }
 
-module.exports = db;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'postgresql://user:pass@localhost/db',
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('localhost') ? false : {
+    rejectUnauthorized: false
+  }
+});
+
+async function initDB() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hackathons (
+        id VARCHAR(255) PRIMARY KEY,
+        name TEXT,
+        description TEXT,
+        created_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS submissions (
+        id VARCHAR(255) PRIMARY KEY,
+        hackathon_id VARCHAR(255) REFERENCES hackathons(id),
+        team_name TEXT,
+        raw_content TEXT,
+        prototype_url TEXT,
+        total_score REAL,
+        confidence_tier TEXT,
+        dimension_scores TEXT,
+        agent_outputs TEXT,
+        feedback_report TEXT,
+        bias_flags TEXT,
+        created_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS overrides (
+        id VARCHAR(255) PRIMARY KEY,
+        submission_id VARCHAR(255) REFERENCES submissions(id),
+        dimension TEXT,
+        original_score REAL,
+        new_score REAL,
+        reason TEXT,
+        judge_name TEXT,
+        created_at TEXT
+      );
+    `);
+    console.log("Neon Postgres Database schema initialized.");
+  } catch(e) {
+    console.error("Failed to initialize Neon Postgres:", e.message);
+  }
+}
+
+// Automatically create tables on startup
+initDB();
+
+module.exports = pool;
