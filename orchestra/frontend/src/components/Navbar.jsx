@@ -13,10 +13,10 @@ export default function Navbar() {
           </Link>
           <div className="flex space-x-6">
             <Link to="/submit" className="text-gray-300 hover:text-orchestra-green px-3 py-2 rounded-md font-medium transition-colors">
-              Submit Project
+              New Hackathon
             </Link>
             <Link to="/" className="text-gray-300 hover:text-orchestra-green px-3 py-2 rounded-md font-medium transition-colors">
-              Leaderboard
+              Leaderboards
             </Link>
           </div>
         </div>

@@ -1,11 +1,32 @@
 const axios = require('axios');
 const pptxParser = require('pptx-text-parser');
 const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
-async function parsePptx(filePath) {
+async function parsePptx(fileSource) {
+  let isTemp = false;
+  let filePath = fileSource;
+  
   try {
+    if (typeof fileSource === 'string' && fileSource.startsWith('http')) {
+      isTemp = true;
+      const response = await axios({
+        url: fileSource,
+        method: 'GET',
+        responseType: 'stream'
+      });
+      filePath = path.join(os.tmpdir(), `orchestra_temp_${Date.now()}.pptx`);
+      const writer = fs.createWriteStream(filePath);
+      response.data.pipe(writer);
+      
+      await new Promise((resolve, reject) => {
+        writer.on('finish', resolve);
+        writer.on('error', reject);
+      });
+    }
+
     const doc = await pptxParser.getPowerPointText(filePath);
-    // getPowerPointText returns a string generally, or array
     let text = "";
     if (typeof doc === 'string') {
       text = doc;
@@ -16,11 +37,14 @@ async function parsePptx(filePath) {
   } catch (err) {
     console.error("PPTX parse failed:", err.message);
     return `\n=== PITCH DECK CONTENT ===\n[Failed to extract text from PPTX: ${err.message}]\n`;
+  } finally {
+    if (isTemp && filePath && fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath); } catch (e) {}
+    }
   }
 }
 
 async function parseGithub(url) {
-  // Extract user/repo from url
   const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
   if (!match) return `\n=== GITHUB REPO ===\n[Invalid GitHub URL: ${url}]\n`;
   
@@ -36,7 +60,6 @@ async function parseGithub(url) {
   try {
     const baseUrl = `https://api.github.com/repos/${user}/${repo}`;
     
-    // 1. Repo metadata
     const metaRes = await axios.get(baseUrl, { headers });
     const { description, language, created_at, open_issues_count } = metaRes.data;
 
@@ -46,14 +69,12 @@ async function parseGithub(url) {
     output += `Created At: ${created_at}\n`;
     output += `Open Issues: ${open_issues_count}\n\n`;
 
-    // 5. Language breakdown
     try {
       const langRes = await axios.get(`${baseUrl}/languages`, { headers });
       const langs = Object.entries(langRes.data).map(([l, bytes]) => `${l}: ${bytes} bytes`).join(', ');
       if (langs) output += `=== LANGUAGE BREAKDOWN ===\n${langs}\n\n`;
     } catch(e) {}
 
-    // 2. README
     try {
       const readmeRes = await axios.get(`${baseUrl}/readme`, { 
         headers: { ...headers, 'Accept': 'application/vnd.github.raw' } 
@@ -66,7 +87,6 @@ async function parseGithub(url) {
       output += `=== README ===\n${readme}\n\n`;
     } catch(e) {}
 
-    // 3. File tree (recursive)
     try {
       const treeRes = await axios.get(`${baseUrl}/git/trees/HEAD?recursive=1`, { headers });
       if (treeRes.data && treeRes.data.tree) {
@@ -75,7 +95,6 @@ async function parseGithub(url) {
       }
     } catch(e) {}
 
-    // 4. Recent commits
     try {
       const commitRes = await axios.get(`${baseUrl}/commits?per_page=10`, { headers });
       const commits = commitRes.data.map(c => `- ${c.commit.author.date}: ${c.commit.message}`).join('\n');
@@ -92,8 +111,10 @@ async function parseGithub(url) {
 async function parserPipeline(files, inputs) {
   let combinedContent = "";
 
-  if (files && files.pptx_file) {
-    const pptxText = await parsePptx(files.pptx_file.path);
+  const pptxSource = inputs.pptx_url || (files && files.pptx_file ? files.pptx_file.path : null);
+
+  if (pptxSource && pptxSource.trim() !== "") {
+    const pptxText = await parsePptx(pptxSource.trim());
     combinedContent += pptxText;
   }
 

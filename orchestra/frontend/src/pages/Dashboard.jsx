@@ -1,13 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-const MAX_SCORES = {
-  innovation: 25,
-  technical: 25,
-  business: 15,
-  presentation: 15,
-  clarity: 20
-};
+const MAX_SCORES = { innovation: 25, technical: 25, business: 15, presentation: 15, clarity: 20 };
 
 function getScoreColor(score, max) {
   const pct = (score / max) * 100;
@@ -23,20 +17,39 @@ function getConfidenceColor(tier) {
 }
 
 export default function Dashboard() {
+  const [hackathons, setHackathons] = useState([]);
+  const [selectedHackathon, setSelectedHackathon] = useState('all');
+  
   const [stats, setStats] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const fetchHackathons = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/api/hackathons');
+      const json = await res.json();
+      if (json.success) setHackathons(json.data);
+    } catch(e) {}
+  };
+
   const fetchData = async () => {
     try {
-      const [statsRes, lbRes] = await Promise.all([
-        fetch('http://localhost:8000/api/stats'),
-        fetch('http://localhost:8000/api/leaderboard')
-      ]);
+      const statsRes = await fetch('http://localhost:8000/api/stats');
+      const lbUrl = selectedHackathon === 'all' 
+          ? 'http://localhost:8000/api/leaderboard' 
+          : `http://localhost:8000/api/leaderboard/${selectedHackathon}`;
+      
+      const lbRes = await fetch(lbUrl);
+      
       const statsData = await statsRes.json();
       const lbData = await lbRes.json();
+      
       if (statsData.success) setStats(statsData.data);
-      if (lbData.success) setLeaderboard(lbData.data);
+      if (lbData.success) {
+        // Recalculate ranks if filtered
+        const rankedLocal = lbData.data.map((r, i) => ({ ...r, rank: i + 1 }));
+        setLeaderboard(rankedLocal);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -45,34 +58,58 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    fetchHackathons();
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
     fetchData();
     const interval = setInterval(fetchData, 8000);
     return () => clearInterval(interval);
-  }, []);
+  }, [selectedHackathon]);
 
-  if (loading && !stats) {
+  if (loading && leaderboard.length === 0 && !stats) {
     return <div className="text-center text-gray-400 mt-20">Loading Dashboard...</div>;
   }
 
   return (
     <div className="animate-fade-in pb-20">
+      
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
+         <h1 className="text-3xl font-bold text-white tracking-tight">Organizer Dashboard</h1>
+         
+         <select 
+            value={selectedHackathon} 
+            onChange={(e) => setSelectedHackathon(e.target.value)}
+            className="bg-orchestra-dark border border-gray-700 text-white text-sm rounded-lg focus:ring-orchestra-green focus:border-orchestra-green block p-2.5 outline-none font-medium min-w-[200px]"
+         >
+            <option value="all">All Submissions</option>
+            {hackathons.map(h => (
+              <option key={h.id} value={h.id}>{h.name}</option>
+            ))}
+         </select>
+      </div>
+
       {/* Stats Bar */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
         <div className="bg-orchestra-dark rounded-2xl p-6 border border-gray-800 shadow-lg">
           <div className="text-gray-400 text-sm mb-1 font-medium tracking-widest uppercase">Total Teams</div>
-          <div className="text-4xl font-bold text-white">{stats?.total_submissions || 0}</div>
+          <div className="text-4xl font-bold text-white">{selectedHackathon === 'all' ? (stats?.total_submissions || 0) : leaderboard.length}</div>
         </div>
         <div className="bg-orchestra-dark rounded-2xl p-6 border border-gray-800 shadow-lg">
           <div className="text-gray-400 text-sm mb-1 font-medium tracking-widest uppercase">Avg Score</div>
-          <div className="text-4xl font-bold text-white">{(stats?.average_score || 0).toFixed(1)} <span className="text-xl text-gray-600 font-normal">/ 100</span></div>
+          <div className="text-4xl font-bold text-white">
+            {selectedHackathon === 'all' ? ((stats?.average_score || 0).toFixed(1)) : ((leaderboard.reduce((a, b) => a + b.total_score, 0) / (leaderboard.length || 1)).toFixed(1))} 
+            <span className="text-xl text-gray-600 font-normal ml-1">/ 100</span>
+          </div>
         </div>
         <div className="bg-orchestra-dark rounded-2xl p-6 border border-gray-800 shadow-lg flex flex-col justify-center">
           <div className="text-gray-400 text-sm mb-1 font-medium tracking-widest uppercase">Highest Score</div>
-          <div className="text-4xl font-bold text-white">{stats?.top_team ? stats.top_team.total_score : 0} <span className="text-xl text-gray-600 font-normal">/ 100</span></div>
+          <div className="text-4xl font-bold text-white">{leaderboard.length > 0 ? leaderboard[0].total_score : 0} <span className="text-xl text-gray-600 font-normal">/ 100</span></div>
         </div>
-        <div className="bg-orchestra-dark rounded-2xl p-6 border border-orchestra-green/30 shadow-lg shadow-orchestra-green/5">
+        <div className="bg-orchestra-dark rounded-2xl p-6 border border-orchestra-green/30 shadow-lg shadow-orchestra-green/5 flex flex-col justify-center">
           <div className="text-orchestra-green text-sm mb-1 font-medium tracking-widest uppercase">Top Team</div>
-          <div className="text-2xl font-bold text-white truncate mt-1">{stats?.top_team ? stats.top_team.team_name : '-'}</div>
+          <div className="text-2xl font-bold text-white truncate mt-1">{leaderboard.length > 0 ? leaderboard[0].team_name : '-'}</div>
         </div>
       </div>
 
@@ -80,7 +117,7 @@ export default function Dashboard() {
       <div className="bg-orchestra-dark rounded-2xl overflow-hidden shadow-2xl border border-gray-800">
         <div className="p-6 border-b border-gray-800 flex justify-between items-center bg-black/40">
           <h2 className="text-xl font-bold text-white flex items-center">
-            <span className="mr-2">🏆</span> Live Leaderboard
+            <span className="mr-2">🏆</span> Shortlist Leaderboard
           </h2>
           <div className="flex items-center space-x-2 text-xs font-mono text-gray-400 bg-black px-3 py-1.5 rounded-full border border-gray-800">
             <span className="relative flex h-2 w-2">
@@ -94,10 +131,10 @@ export default function Dashboard() {
         {leaderboard.length === 0 ? (
           <div className="p-16 text-center">
             <div className="text-6xl mb-6 opacity-50">📊</div>
-            <h3 className="text-2xl text-white font-semibold mb-3">No submissions yet</h3>
-            <p className="text-gray-400 mb-8 max-w-md mx-auto">Upload the first hackathon project to see the AI panel evaluate and rank it in real-time.</p>
+            <h3 className="text-2xl text-white font-semibold mb-3">No submissions found</h3>
+            <p className="text-gray-400 mb-8 max-w-md mx-auto">Create a Hackathon event and upload a CSV of projects to let the AI build your shortlist.</p>
             <Link to="/submit" className="bg-orchestra-green hover:bg-lime-400 text-black font-bold py-3 px-8 rounded-lg transition-transform hover:scale-105 inline-block">
-              Submit Project
+              Upload CSV
             </Link>
           </div>
         ) : (
@@ -151,7 +188,7 @@ export default function Dashboard() {
                     </td>
                     <td className="py-5 px-6 text-right">
                       <Link to={`/feedback/${row.submission_id}`} className="inline-block bg-white/5 hover:bg-white/10 border border-gray-700 text-white text-sm font-semibold py-2.5 px-6 rounded-lg transition-all group-hover:border-orchestra-green group-hover:text-orchestra-green">
-                        View Report
+                        View Details
                       </Link>
                     </td>
                   </tr>
