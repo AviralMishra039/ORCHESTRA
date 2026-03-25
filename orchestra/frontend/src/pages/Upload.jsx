@@ -97,7 +97,7 @@ export default function Upload() {
           <div className="flex flex-col space-y-4 max-w-lg w-full text-left font-mono">
             {allMessages.map((msg, i) => (
               <div key={i} className="text-orchestra-green animate-pulse text-lg">
-                > {msg}
+                &gt; {msg}
               </div>
             ))}
           </div>
