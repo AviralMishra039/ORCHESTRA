@@ -26,9 +26,9 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation, no preamble
 
 Content to evaluate:
 ${content}`;
-  
+
   const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
+    model: 'gpt-4o-mini',
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.2
   });

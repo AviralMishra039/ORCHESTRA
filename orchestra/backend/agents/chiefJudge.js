@@ -3,7 +3,7 @@ const OpenAI = require('openai');
 
 async function chiefJudge(judgeOutputs, auditResult) {
   const openai = new OpenAI();
-  
+
   const prompt = `You are the Chief Judge on the Orchestra hacking panel.
 You receive the 5 judge outputs and bias auditor report. Your job is to summarize and calculate the final confidence tier.
 The total score is the exact sum of all 5 scores (out of 100).
